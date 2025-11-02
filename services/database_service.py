@@ -1,0 +1,500 @@
+#!/usr/bin/env python3
+"""
+Modern Database Service with connection pooling and async operations
+"""
+import aiosqlite
+import logging
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+import json
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+class DatabaseService:
+    def __init__(self, db_path: str = "data/kite_bot.db"):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection_pool = None
+        logger.info(f"✅ DatabaseService initialized with path: {self.db_path}")
+    
+    async def init_db(self) -> None:
+        """Initialize database with all required tables"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Users table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        telegram_id INTEGER PRIMARY KEY,
+                        username TEXT,
+                        first_name TEXT NOT NULL,
+                        last_name TEXT,
+                        phone TEXT,
+                        language TEXT DEFAULT 'en',
+                        language_selected BOOLEAN DEFAULT 0,
+                        registration_date TEXT NOT NULL,
+                        last_activity TEXT NOT NULL,
+                        messages_count INTEGER DEFAULT 0,
+                        bookings_count INTEGER DEFAULT 0,
+                        completed_lessons INTEGER DEFAULT 0,
+                        skill_level TEXT DEFAULT 'beginner',
+                        level_test_completed BOOLEAN DEFAULT 0,
+                        test_score INTEGER,
+                        preferred_location TEXT,
+                        preferred_time_slot TEXT,
+                        equipment_rental BOOLEAN DEFAULT 0,
+                        source TEXT,
+                        referrals INTEGER DEFAULT 0,
+                        subscribed_to_news BOOLEAN DEFAULT 1,
+                        is_active BOOLEAN DEFAULT 1,
+                        is_blocked BOOLEAN DEFAULT 0,
+                        last_command TEXT,
+                        contact_permission BOOLEAN DEFAULT 0,
+                        last_contact_date TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                ''')
+                
+                # Bookings table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS bookings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_id INTEGER NOT NULL,
+                        user_name TEXT NOT NULL,
+                        booking_date TEXT NOT NULL,
+                        booking_time TEXT NOT NULL,
+                        location TEXT NOT NULL,
+                        status TEXT DEFAULT 'booked',
+                        wind_forecast TEXT,
+                        price DECIMAL(10,2),
+                        duration INTEGER DEFAULT 60,
+                        notes TEXT,
+                        admin_notes TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        confirmed_at TEXT,
+                        completed_at TEXT,
+                        paid_at TEXT,
+                        FOREIGN KEY (telegram_id) REFERENCES users (telegram_id)
+                    )
+                ''')
+                
+                # Level test results table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS level_tests (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_id INTEGER NOT NULL,
+                        test_date TEXT NOT NULL,
+                        score INTEGER NOT NULL,
+                        level TEXT NOT NULL,
+                        answers_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (telegram_id) REFERENCES users (telegram_id)
+                    )
+                ''')
+                
+                # Admin actions log
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS admin_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        admin_id INTEGER NOT NULL,
+                        action TEXT NOT NULL,
+                        target_type TEXT,
+                        target_id INTEGER,
+                        details TEXT,
+                        created_at TEXT NOT NULL
+                    )
+                ''')
+                
+                await db.commit()
+                logger.info("✅ Database tables initialized successfully")
+                
+        except Exception as e:
+            logger.error(f"❌ Database initialization failed: {e}")
+            raise
+    
+    async def get_user(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        """Get user by telegram ID"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    'SELECT * FROM users WHERE telegram_id = ?', 
+                    (telegram_id,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    return dict(row) if row else None
+                    
+        except Exception as e:
+            logger.error(f"❌ Error getting user {telegram_id}: {e}")
+            return None
+    
+    async def create_user(self, telegram_user) -> Dict[str, Any]:
+        """Create new user"""
+        now = datetime.now().isoformat()
+        user_data = {
+            'telegram_id': telegram_user.id,
+            'username': telegram_user.username,
+            'first_name': telegram_user.first_name,
+            'last_name': telegram_user.last_name,
+            'registration_date': now,
+            'last_activity': now,
+            'created_at': now,
+            'updated_at': now,
+            'messages_count': 1
+        }
+        
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute('''
+                    INSERT INTO users (
+                        telegram_id, username, first_name, last_name, 
+                        registration_date, last_activity, created_at, updated_at, messages_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    user_data['telegram_id'], user_data['username'], user_data['first_name'],
+                    user_data['last_name'], user_data['registration_date'], user_data['last_activity'],
+                    user_data['created_at'], user_data['updated_at'], user_data['messages_count']
+                ))
+                await db.commit()
+                
+                logger.info(f"✅ New user created: {telegram_user.id} - {telegram_user.first_name}")
+                return user_data
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating user {telegram_user.id}: {e}")
+            raise
+    
+    async def update_user(self, telegram_id: int, **kwargs) -> bool:
+        """Update user data"""
+        if not kwargs:
+            return False
+            
+        try:
+            # Add updated_at timestamp
+            kwargs['updated_at'] = datetime.now().isoformat()
+            
+            set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
+            values = list(kwargs.values())
+            values.append(telegram_id)
+            
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    f'UPDATE users SET {set_clause} WHERE telegram_id = ?',
+                    values
+                )
+                await db.commit()
+                
+                logger.debug(f"✅ User {telegram_id} updated: {list(kwargs.keys())}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating user {telegram_id}: {e}")
+            return False
+    # services/database_service.py - добавить этот метод если его нет
+
+def set_user_language(self, telegram_id: int, language: str):
+    """Установить язык пользователя"""
+    user = self.get_user(telegram_id)
+    if user:
+        user.language = language
+        user.language_selected = True
+        self.save_users()
+        logger.info(f"Language set to {language} for user {telegram_id}")
+        return True
+    return False
+    async def get_or_create_user(self, telegram_user) -> Dict[str, Any]:
+        """Get existing user or create new one"""
+        user = await self.get_user(telegram_user.id)
+        if user:
+            # Update last activity
+            await self.update_user(
+                telegram_user.id, 
+                last_activity=datetime.now().isoformat(),
+                messages_count=user.get('messages_count', 0) + 1
+            )
+            return user
+        else:
+            return await self.create_user(telegram_user)
+    
+    # Bookings management
+    async def create_booking(self, telegram_id: int, user_name: str, booking_date: str, 
+                           booking_time: str, location: str, **kwargs) -> Optional[Dict[str, Any]]:
+        """Create new booking"""
+        now = datetime.now().isoformat()
+        booking_data = {
+            'telegram_id': telegram_id,
+            'user_name': user_name,
+            'booking_date': booking_date,
+            'booking_time': booking_time,
+            'location': location,
+            'status': 'booked',
+            'created_at': now,
+            'updated_at': now,
+            **kwargs
+        }
+        
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute('''
+                    INSERT INTO bookings (
+                        telegram_id, user_name, booking_date, booking_time, location,
+                        status, created_at, updated_at, wind_forecast, price, duration, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    booking_data['telegram_id'], booking_data['user_name'], 
+                    booking_data['booking_date'], booking_data['booking_time'],
+                    booking_data['location'], booking_data['status'],
+                    booking_data['created_at'], booking_data['updated_at'],
+                    booking_data.get('wind_forecast'), booking_data.get('price'),
+                    booking_data.get('duration', 60), booking_data.get('notes')
+                ))
+                
+                booking_id = cursor.lastrowid
+                await db.commit()
+                
+                # Update user's bookings count
+                await self._increment_user_bookings(telegram_id)
+                
+                logger.info(f"✅ Booking created: {booking_id} for user {telegram_id}")
+                return {**booking_data, 'id': booking_id}
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating booking for user {telegram_id}: {e}")
+            return None
+    
+    async def _increment_user_bookings(self, telegram_id: int) -> None:
+        """Increment user's bookings count"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    'UPDATE users SET bookings_count = bookings_count + 1, updated_at = ? WHERE telegram_id = ?',
+                    (datetime.now().isoformat(), telegram_id)
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error(f"❌ Error incrementing bookings count for {telegram_id}: {e}")
+    
+    async def get_user_bookings(self, telegram_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get user's bookings"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    'SELECT * FROM bookings WHERE telegram_id = ? ORDER BY booking_date DESC, booking_time DESC LIMIT ?',
+                    (telegram_id, limit)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+                    
+        except Exception as e:
+            logger.error(f"❌ Error getting bookings for user {telegram_id}: {e}")
+            return []
+    
+    async def get_bookings_by_date(self, date: str) -> List[Dict[str, Any]]:
+        """Get all bookings for specific date"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    'SELECT * FROM bookings WHERE booking_date = ? ORDER BY booking_time',
+                    (date,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+                    
+        except Exception as e:
+            logger.error(f"❌ Error getting bookings for date {date}: {e}")
+            return []
+    
+    async def update_booking_status(self, booking_id: int, status: str, admin_notes: str = None) -> bool:
+        """Update booking status"""
+        try:
+            update_data = {
+                'status': status,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            if status == 'confirmed':
+                update_data['confirmed_at'] = datetime.now().isoformat()
+            elif status == 'completed':
+                update_data['completed_at'] = datetime.now().isoformat()
+            elif status == 'paid':
+                update_data['paid_at'] = datetime.now().isoformat()
+            
+            if admin_notes:
+                update_data['admin_notes'] = admin_notes
+            
+            set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
+            values = list(update_data.values())
+            values.append(booking_id)
+            
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    f'UPDATE bookings SET {set_clause} WHERE id = ?',
+                    values
+                )
+                await db.commit()
+                
+                logger.info(f"✅ Booking {booking_id} status updated to: {status}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating booking {booking_id}: {e}")
+            return False
+    
+    # Level test management
+    async def save_level_test_result(self, telegram_id: int, score: int, level: str, answers: Dict) -> bool:
+        """Save level test result"""
+        try:
+            now = datetime.now().isoformat()
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute('''
+                    INSERT INTO level_tests (telegram_id, test_date, score, level, answers_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    telegram_id, now, score, level, json.dumps(answers), now
+                ))
+                
+                # Update user's test completion status
+                await db.execute('''
+                    UPDATE users SET 
+                    level_test_completed = 1, 
+                    test_score = ?,
+                    skill_level = ?,
+                    updated_at = ?
+                    WHERE telegram_id = ?
+                ''', (score, level, now, telegram_id))
+                
+                await db.commit()
+                logger.info(f"✅ Level test saved for user {telegram_id}: {level} ({score} points)")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error saving level test for user {telegram_id}: {e}")
+            return False
+    
+    async def get_level_test_history(self, telegram_id: int) -> List[Dict[str, Any]]:
+        """Get user's level test history"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    'SELECT * FROM level_tests WHERE telegram_id = ? ORDER BY test_date DESC',
+                    (telegram_id,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+                    
+        except Exception as e:
+            logger.error(f"❌ Error getting level test history for user {telegram_id}: {e}")
+            return []
+    
+    # Admin functions
+    async def get_all_users(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get all users (for admin)"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    'SELECT * FROM users ORDER BY registration_date DESC LIMIT ? OFFSET ?',
+                    (limit, offset)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+                    
+        except Exception as e:
+            logger.error(f"❌ Error getting all users: {e}")
+            return []
+    
+    async def get_recent_bookings(self, days: int = 7) -> List[Dict[str, Any]]:
+        """Get recent bookings (for admin)"""
+        try:
+            date_from = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    '''SELECT b.*, u.first_name, u.username 
+                       FROM bookings b 
+                       LEFT JOIN users u ON b.telegram_id = u.telegram_id 
+                       WHERE b.booking_date >= ? 
+                       ORDER BY b.booking_date DESC, b.booking_time DESC''',
+                    (date_from,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+                    
+        except Exception as e:
+            logger.error(f"❌ Error getting recent bookings: {e}")
+            return []
+    
+    async def log_admin_action(self, admin_id: int, action: str, target_type: str = None, 
+                             target_id: int = None, details: str = None) -> bool:
+        """Log admin action"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute('''
+                    INSERT INTO admin_logs (admin_id, action, target_type, target_id, details, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    admin_id, action, target_type, target_id, details, datetime.now().isoformat()
+                ))
+                await db.commit()
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error logging admin action: {e}")
+            return False
+    
+    # Statistics
+    async def get_statistics(self) -> Dict[str, Any]:
+        """Get basic statistics"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Total users
+                async with db.execute('SELECT COUNT(*) FROM users') as cursor:
+                    total_users = (await cursor.fetchone())[0]
+                
+                # Active users (last 30 days)
+                active_date = (datetime.now() - timedelta(days=30)).isoformat()
+                async with db.execute('SELECT COUNT(*) FROM users WHERE last_activity > ?', (active_date,)) as cursor:
+                    active_users = (await cursor.fetchone())[0]
+                
+                # Total bookings
+                async with db.execute('SELECT COUNT(*) FROM bookings') as cursor:
+                    total_bookings = (await cursor.fetchone())[0]
+                
+                # Today's bookings
+                today = datetime.now().strftime('%Y-%m-%d')
+                async with db.execute('SELECT COUNT(*) FROM bookings WHERE booking_date = ?', (today,)) as cursor:
+                    today_bookings = (await cursor.fetchone())[0]
+                
+                return {
+                    'total_users': total_users,
+                    'active_users': active_users,
+                    'total_bookings': total_bookings,
+                    'today_bookings': today_bookings
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error getting statistics: {e}")
+            return {}
+    
+    async def backup_database(self, backup_path: str = None) -> bool:
+        """Create database backup"""
+        try:
+            if not backup_path:
+                backup_path = f"data/backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            
+            import shutil
+            shutil.copy2(self.db_path, backup_path)
+            logger.info(f"✅ Database backed up to: {backup_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error backing up database: {e}")
+            return False
+
+# Singleton instance
+database_service = DatabaseService()

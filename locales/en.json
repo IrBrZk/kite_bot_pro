@@ -1,0 +1,27 @@
+{
+  "menu": {
+    "booking": "📅 Book Lesson",
+    "level_test": "🎯 Level Test",
+    "locations": "📍 Locations",
+    "safety": "🛟 Safety", 
+    "contacts": "📞 Contacts",
+    "gallery": "📸 Gallery",
+    "language": "🌐 Change Language",
+    "home": "🏠 Main Menu",
+    "back": "↩️ Back"
+  },
+  "welcome": {
+    "new_user": "👋 Welcome to Kite Bot!",
+    "start_button": "🚀 START", 
+    "detecting_language": "Hello! Detecting your language...",
+    "personalized": "Hello friend!!! I am Abdula's bot manager, a super professional coach, champion, and experienced master with many years of experience! 🏄‍♂️"
+  },
+  "booking": {
+    "choose_date": "📅 Choose date for lesson:",
+    "choose_time": "🕐 Choose time:",
+    "enter_name": "📝 Enter your name:",
+    "choose_location": "🌊 Choose location:",
+    "confirm_booking": "✅ Booking confirmed!",
+    "your_bookings": "📅 **YOUR BOOKINGS**"
+  }
+}
