@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 
 from config.settings import TELEGRAM_BOT_TOKEN, LOCATIONS, SCHEDULE
 from config.constants import States
-from config.constants import SUPPORTED_LANGUAGES
-import traceback, booking_status
+from config.constants import BookingStatus, SUPPORTED_LANGUAGES
+import traceback
 from services.language_manager import LanguageManager
 from services.database_service import DatabaseService
 from services.booking_service import BookingService
@@ -525,9 +525,9 @@ async def start(update, context):
     logger.info(f"👋 User: {user_id} - {user.first_name}")
 
     # Проверяем пользователя в базе и получаем его язык
-    user_obj = database_service.get_user(user_id)
+    user_obj = await database_service.get_user(user_id)
     if not user_obj:
-        user_obj = database_service.create_user(user)
+        user_obj = await database_service.create_user(user)
     
     # Устанавливаем язык пользователя в language_manager
     # Сначала проверяем language_manager, потом базу, потом по умолчанию 'en'
@@ -591,56 +591,53 @@ async def handle_main_menu(update, context):
 
 async def handle_lot_selection(update, context):
     user_id = update.effective_user.id
-    selected_text = update.message.text
-    
-    print(f"LOT_SELECTION: User {user_id} selected: {selected_text}")
-    
-    # Home button
-    if selected_text in ["🏠 Домой", "🏠 Home", "🏠 الرئيسية"]:
-        await update.message.reply_text("Главное меню", reply_markup=get_main_menu(user_id))
-        return States.MAIN_MENU
-    
-    # Confirm selection
-    if selected_text == "✅ Подтвердить выбор лотов":
-        if context.user_data.get('selected_lots'):
-            confirmation_text = format_booking_confirmation(user_id, context.user_data)
-            await update.message.reply_text(confirmation_text, reply_markup=get_final_confirmation_keyboard(user_id), parse_mode='Markdown')
-            return States.BOOKING_FINAL_CONFIRM
-        else:
-            await update.message.reply_text("❌ Выберите хотя бы один час", reply_markup=get_lot_selection_keyboard())
-            return States.BOOKING_LOT_SELECTION
-    
-    # Initialize selected lots
+    text = update.message.text.strip()
+
+    # Инициализация
     if 'selected_lots' not in context.user_data:
         context.user_data['selected_lots'] = []
-    
-    # Process hour selection
-    for i in range(1, 9):
-        hour_text = f"{i} час" + ("ов" if i > 1 else "")
-        if hour_text in selected_text:
-            if i in context.user_data['selected_lots']:
-                context.user_data['selected_lots'].remove(i)
-                await update.message.reply_text(f"❌ {i} час удален")
-            else:
-                context.user_data['selected_lots'].append(i)
-                await update.message.reply_text(f"✅ {i} час(ов) добавлено")
-            context.user_data['selected_lots'].sort()
-            break
-    
-    # Create message - БЕЗ F-STRING ПРОБЛЕМ
-    selected_count = len(context.user_data['selected_lots'])
-    if selected_count > 0:
-        hours_list = []
-        for h in context.user_data['selected_lots']:
-            hours_list.append(f"{h} час" + ("ов" if h > 1 else ""))
-        hours_text = ", ".join(hours_list)
-        message_text = f"✅ Выбрано часов: {selected_count}\nЧасы: {hours_text}\n\nНажмите '✅ Подтвердить выбор лотов' когда закончите"
-    else:
-        message_text = "🎯 Выберите количество часов (1-8 часов подряд)\nНажмите '✅ Подтвердить выбор лотов' когда закончите"
-    
-    await update.message.reply_text(message_text, reply_markup=get_lot_selection_keyboard(context.user_data['selected_lots']))
-    return States.BOOKING_LOT_SELECTION
 
+    selected_lots = context.user_data['selected_lots']
+
+    # Обработка подтверждения
+    confirm_text = language_manager.get_text(user_id, 'booking.confirm_lots')
+    if text == confirm_text and selected_lots:
+        context.user_data['total_hours'] = sum(selected_lots)
+        await update.message.reply_text("Переходим к контактам...")
+        return States.BOOKING_CONTACTS
+
+    # Обработка выбора 1–8 часов
+    found = False
+    for i in range(1, 9):
+        hour_ru = f"{i} час" + ("ов" if i > 1 else "")
+        hour_en = f"{i} hour" + ("s" if i > 1 else "")
+        hour_ar = f"{i} ساعة"
+
+        if hour_ru in text or hour_en in text or hour_ar in text:
+            if i in selected_lots:
+                selected_lots.remove(i)
+                await update.message.reply_text(f"❌ {i} час(ов) удалено")
+            else:
+                selected_lots.append(i)
+                await update.message.reply_text(f"✅ {i} час(ов) добавлено")
+            selected_lots.sort()
+            found = True
+            break
+
+    if not found:
+        await update.message.reply_text("Введите число от 1 до 8 (например: 3 часа)")
+
+    # Формируем сообщение
+    count = len(selected_lots)
+    if count > 0:
+        hours_list = ", ".join([f"{h} час{'ов' if h > 1 else ''}" for h in selected_lots])
+        message = f"Выбрано: {count} час{'ов' if count > 1 else ''}\nЧасы: {hours_list}\n\nНажмите «{confirm_text}» для продолжения"
+    else:
+        message = "Выберите количество часов подряд (1–8)\n\nВведите число, например: 3 часа"
+
+    keyboard = get_lot_selection_keyboard(selected_lots)
+    await update.message.reply_text(message, reply_markup=keyboard)
+    return States.BOOKING_LOT_SELECTION
 async def start_booking(update, context):
     user_id = update.effective_user.id
     context.user_data.clear()
@@ -651,52 +648,7 @@ async def start_booking(update, context):
     keyboard = calendar_service.get_calendar_keyboard()
     await update.message.reply_text(choose_date_text, reply_markup=keyboard, parse_mode='Markdown')
     return States.BOOKING_DATE
-
-async def handle_calendar_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
     
-    logger.info(f"📅 Calendar callback: {data} from user {user_id}")
-    
-    if data == 'home':
-        await query.edit_message_text("🏠 Возврат в главное меню")
-        await query.message.reply_text("Выберите действие:", reply_markup=get_main_menu(user_id))
-        return States.MAIN_MENU
-    
-    if data.startswith('calendar_'):
-        if data == "calendar_current": return
-        parts = data.split('_')
-        if len(parts) == 3:
-            try:
-                year, month = int(parts[1]), int(parts[2])
-                keyboard = calendar_service.get_calendar_keyboard(year, month)
-                await query.edit_message_text(
-                    query.message.text,
-                    reply_markup=keyboard,
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Calendar error: {e}")
-                await query.answer("❌ Ошибка календаря", show_alert=True)
-    
-    elif data.startswith('book_date_'):
-        date = data.replace('book_date_', '')
-        if calendar_service.is_date_available(date):
-            context.user_data['booking_date'] = date
-            wind_description = calendar_service.get_wind_description(date)
-            choose_time_text = f"🕐 *Выберите время*\n\n{wind_description}"
-            
-            await query.message.reply_text(
-                choose_time_text,
-                reply_markup=get_times_keyboard(),
-                parse_mode='Markdown'
-            )
-            return States.BOOKING_TIME
-        else:
-            await query.answer("❌ Эта дата недоступна", show_alert=True)
-
 async def handle_time_selection(update, context):
     user_id = update.effective_user.id
     selected_time = update.message.text
@@ -747,84 +699,53 @@ async def handle_location_selection(update, context):
 
 async def handle_lot_selection(update, context):
     user_id = update.effective_user.id
-    selected_text = update.message.text
-    
-    print(f"🔧 LOT_SELECTION: User {user_id} selected: '{selected_text}'")
-    
-    if selected_text in ["🏠 Домой", "🏠 Home", "🏠 الرئيسية"]:
-        await update.message.reply_text("🏠 Главное меню", reply_markup=get_main_menu(user_id))
-        return States.MAIN_MENU
-    
-    if selected_text == "✅ Подтвердить выбор лотов":
-        if context.user_data.get('selected_lots'):
-            # Переходим к подтверждению
-            confirmation_text = format_booking_confirmation(user_id, context.user_data)
-            await update.message.reply_text(
-                confirmation_text,
-                reply_markup=get_final_confirmation_keyboard(user_id),
-                parse_mode='Markdown'
-            )
-            return States.BOOKING_FINAL_CONFIRM
-        else:
-            await update.message.reply_text("❌ Выберите хотя бы один час", reply_markup=get_lot_selection_keyboard())
-            return States.BOOKING_LOT_SELECTION
-    
-    # Инициализируем список выбранных лотов
-    if 'selected_lots' not in context.user_data:
-        context.user_data['selected_lots'] = []
-    
-    # Обрабатываем выбор часов (1-8)
-    for i in range(1, 9):
-        hour_text = f"{i} час" + ("ов" if i > 1 else "")
-        if hour_text in selected_text or f"{i} hour" in selected_text or f"{i} ساعة" in selected_text:
-            if i in context.user_data['selected_lots']:
-                # Удаляем если уже выбран
-                context.user_data['selected_lots'].remove(i)
-                await update.message.reply_text(f"❌ {i} час удален из выбора")
-            else:
-                # Добавляем если не выбран
-                context.user_data['selected_lots'].append(i)
-                await update.message.reply_text(f"✅ {i} час(ов) добавлено к выбору")
-            
-            # Сортируем для красоты
-            context.user_data['selected_lots'].sort()
-            break
-    
-    # Показываем текущий выбор
-    selected_count = len(context.user_data['selected_lots'])
-    if selected_count > 0:
-        hours_text = ", ".join([f"{h} час{'ов' if h > 1 else ''}" for h in context.user_data['selected_lots']])
-        message = f"✅ Выбрано часов: {selected_count}\nЧасы: {hours_text}\n\nНажмите '✅ Подтвердить выбор лотов' когда закончите"
-    else:
-        message = "Выберите количество часов (1-8 часов подряд)\n\n"
-        message += "Нажмите 'Подтвердить выбор лотов' когда закончите"
-        message,
-        reply_markup=get_lot_selection_keyboard(context.user_data['selected_lots'])
-    return States.BOOKING_LOT_SELECTION
-    
-    if 'selected_lots' not in context.user_data:
-        context.user_data['selected_lots'] = []
-    
-    lot_match = re.search(r'(\d+)\s*лот', selected_text)
-    if lot_match:
-        lot_count = int(lot_match.group(1))
-        
-        if lot_count in context.user_data['selected_lots']:
-            context.user_data['selected_lots'].remove(lot_count)
-            await update.message.reply_text(f"❌ {lot_count} лот(ов) удалено из выбора")
-        else:
-            if 1 <= lot_count <= 8:
-                context.user_data['selected_lots'].append(lot_count)
-                await update.message.reply_text(f"✅ {lot_count} лот(ов) добавлено к выбору")
-            else:
-                await update.message.reply_text("❌ Можно выбрать от 1 до 8 лотов")
-    
-    await update.message.reply_text(
-        f"✅ Выбрано вариантов: {len(context.user_data['selected_lots'])}\nНажмите '✅ Подтвердить выбор лотов' когда закончите",
-        reply_markup=get_lot_selection_keyboard(context.user_data['selected_lots'])
-    )
-    return States.BOOKING_LOT_SELECTION
+    text = update.message.text.strip()
 
+    # Инициализация
+    if 'selected_lots' not in context.user_data:
+        context.user_data['selected_lots'] = []
+
+    selected_lots = context.user_data['selected_lots']
+
+    # Обработка подтверждения
+    confirm_text = language_manager.get_text(user_id, 'booking.confirm_lots')
+    if text == confirm_text and selected_lots:
+        context.user_data['total_hours'] = sum(selected_lots)
+        await update.message.reply_text("Переходим к контактам...")
+        return States.BOOKING_CONTACTS
+
+    # Обработка выбора 1–8 часов
+    found = False
+    for i in range(1, 9):
+        hour_ru = f"{i} час" + ("ов" if i > 1 else "")
+        hour_en = f"{i} hour" + ("s" if i > 1 else "")
+        hour_ar = f"{i} ساعة"
+
+        if hour_ru in text or hour_en in text or hour_ar in text:
+            if i in selected_lots:
+                selected_lots.remove(i)
+                await update.message.reply_text(f"❌ {i} час(ов) удалено")
+            else:
+                selected_lots.append(i)
+                await update.message.reply_text(f"✅ {i} час(ов) добавлено")
+            selected_lots.sort()
+            found = True
+            break
+
+    if not found:
+        await update.message.reply_text("Введите число от 1 до 8 (например: 3 часа)")
+
+    # Формируем сообщение
+    count = len(selected_lots)
+    if count > 0:
+        hours_list = ", ".join([f"{h} час{'ов' if h > 1 else ''}" for h in selected_lots])
+        message = f"Выбрано: {count} час{'ов' if count > 1 else ''}\nЧасы: {hours_list}\n\nНажмите «{confirm_text}» для продолжения"
+    else:
+        message = "Выберите количество часов подряд (1–8)\n\nВведите число, например: 3 часа"
+
+    keyboard = get_lot_selection_keyboard(selected_lots)
+    await update.message.reply_text(message, reply_markup=keyboard)
+    return States.BOOKING_LOT_SELECTION
 async def handle_contact_input(update, context):
     user_id = update.effective_user.id
     user_input = update.message.text
@@ -1288,6 +1209,22 @@ async def error_handler(update, context):
     
     return States.MAIN_MENU
 
+async def handle_calendar(update, context):
+    query = update.callback_query
+    await query.answer()
+    _, year, month = query.data.split("_")
+    keyboard = calendar_service.get_calendar_keyboard(int(year), int(month))
+    await query.edit_message_reply_markup(reply_markup=keyboard)
+    return States.BOOKING_DATE
+
+async def handle_date_select(update, context):
+    query = update.callback_query
+    await query.answer()
+    date = query.data.split("_", 1)[1]
+    context.user_data["date"] = date
+    await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:")
+    return States.BOOKING_TIME
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN не найден!")
@@ -1356,6 +1293,41 @@ def main():
     
     logger.info("🚀 Финальный бот запущен с новой логикой бронирования!")
     application.run_polling()
+async def handle_calendar(update, context):
+    query = update.callback_query
+    await query.answer()
+    _, year, month = query.data.split("_")
+    keyboard = calendar_service.get_calendar_keyboard(int(year), int(month))
+    await query.edit_message_reply_markup(reply_markup=keyboard)
+    return States.BOOKING_DATE
+
+async def handle_date_select(update, context):
+    query = update.callback_query
+    await query.answer()
+    date = query.data.split("_", 1)[1]
+    context.user_data["date"] = date
+    await query.message.reply_text(f"Выбрана дата: {date}\\nВыберите время:")
+    return States.BOOKING_TIME
+async def handle_calendar_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith('calendar_'):
+        year, month = map(int, data.split('_')[1:])
+        keyboard = calendar_service.get_calendar_keyboard(year, month)
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        return States.BOOKING_DATE
+
+    elif data.startswith('book_date_'):
+        date = data.split('_')[2]
+        context.user_data['booking_date'] = date
+        await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:")
+        return States.BOOKING_TIME
+
+    return States.BOOKING_DATE
+
 
 if __name__ == '__main__':
     main()
+
