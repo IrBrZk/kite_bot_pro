@@ -1,27 +1,25 @@
 {
-  "menu": {
-    "booking": "📅 Book Lesson",
-    "level_test": "🎯 Level Test",
-    "locations": "📍 Locations",
-    "safety": "🛟 Safety", 
-    "contacts": "📞 Contacts",
-    "gallery": "📸 Gallery",
-    "language": "🌐 Change Language",
-    "home": "🏠 Main Menu",
-    "back": "↩️ Back"
-  },
-  "welcome": {
-    "new_user": "👋 Welcome to Kite Bot!",
-    "start_button": "🚀 START", 
-    "detecting_language": "Hello! Detecting your language...",
-    "personalized": "Hello friend!!! I am Abdula's bot manager, a super professional coach, champion, and experienced master with many years of experience! 🏄‍♂️"
-  },
-  "booking": {
-    "choose_date": "📅 Choose date for lesson:",
-    "choose_time": "🕐 Choose time:",
-    "enter_name": "📝 Enter your name:",
-    "choose_location": "🌊 Choose location:",
-    "confirm_booking": "✅ Booking confirmed!",
-    "your_bookings": "📅 **YOUR BOOKINGS**"
-  }
+  "welcome": "Welcome friend!!! I am Abdullah's manager bot, a super professional trainer, champion and experienced master with many years of experience! 🏄‍♂️",
+  "welcome_detect": "Please write your greeting in your language so I can detect your preferred language.",
+  "timeout_english": "I'll use English! 🏄‍♂️", 
+  "manual_language": "Please choose your language:",
+  "ai_busy": "AI is busy, please try /start again",
+  "language_changed": "Language changed to {}",
+  "use_menu_buttons": "Please use the menu buttons 🏄‍♂️",
+  
+  "menu_booking": "📅 Book Lesson",
+  "menu_level_test": "🎯 Level Test",
+  "menu_locations": "🌊 Locations",
+  "menu_safety": "🛟 Safety", 
+  "menu_contacts": "📞 Contacts",
+  "menu_gallery": "🖼️ Gallery",
+  "menu_language": "🌐 Change Language",
+  
+  "booking_coming_soon": "Booking functionality coming soon! 🏄‍♂️",
+  "test_coming_soon": "Level test coming soon! 🎯",
+  "locations_coming_soon": "Locations info coming soon! 🌊",
+  "safety_coming_soon": "Safety rules coming soon! 🛟",
+  "gallery_message": "🏆 Photo and video of champion Abdullah in action!",
+  
+  "contacts_info": "📞 **Contacts of trainer Abdullah:**\n\n👤 **Abdullah - Kitesurfing Champion**\n🏆 Multiple UAE Champion\n🎯 Experience: 15+ years\n👨‍🎓 Trained: 1000+ students\n\n📱 **Phone:** +971 564327509\n📷 **Instagram:** @abdula_kite_champion\n✈️ **Telegram:** @abdula_kite_pro\n\n📍 **Locations:** Dubai, Abu Dhabi\n⏰ **Schedule:** Daily 7:00-19:00\n\n💬 **Write to any messenger for booking!**"
 }
