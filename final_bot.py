@@ -1122,8 +1122,13 @@ async def handle_language_selection(update, context):
     # Сохраняем язык в memory manager
     language_manager.set_user_language(user_id, language_code)
     
-    # Сохраняем язык в базу данных
-    await database_service.update_user(user_id, language=language_code, language_selected=True)
+    # Сохраняем язык в базу данных с обработкой ошибок
+    try:
+        await database_service.update_user(user_id, language=language_code, language_selected=True)
+        logger.debug(f"DBG_LANG_HANDLER: Database updated for user {user_id}")
+    except Exception as db_error:
+        logger.error(f"❌ Failed to save language to database for user {user_id}: {db_error}", exc_info=True)
+        # Continue anyway - language is saved in memory manager
     
     # Сохраняем в context для резервирования
     context.user_data['language'] = language_code
@@ -1257,6 +1262,36 @@ async def handle_date_select(update, context):
     await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:")
     return States.BOOKING_TIME
 
+async def handle_calendar_callback(update, context):
+    """Handle calendar navigation and date selection"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = update.effective_user.id
+
+    if data.startswith('calendar_'):
+        # Navigate calendar months
+        year, month = map(int, data.split('_')[1:])
+        keyboard = calendar_service.get_calendar_keyboard(year, month)
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        return States.BOOKING_DATE
+
+    elif data.startswith('book_date_'):
+        # Select a specific date
+        date = data.split('_')[2]
+        context.user_data['booking_date'] = date
+        logger.info(f"BOOKING_DATE: user_id={user_id}, selected_date={date}")
+        await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:", reply_markup=get_times_keyboard())
+        return States.BOOKING_TIME
+    
+    elif data == 'home':
+        # Return to main menu
+        await query.message.reply_text("🏠 Главное меню", reply_markup=get_main_menu(user_id))
+        return States.MAIN_MENU
+    
+    # Ignore other callbacks
+    return States.BOOKING_DATE
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN не найден!")
@@ -1342,43 +1377,8 @@ def main():
     except Exception as e:
         logger.error(f"❌ Unhandled exception in bot: {e}", exc_info=True)
         sys.exit(1)
-async def handle_calendar(update, context):
-    query = update.callback_query
-    await query.answer()
-    _, year, month = query.data.split("_")
-    keyboard = calendar_service.get_calendar_keyboard(int(year), int(month))
-    await query.edit_message_reply_markup(reply_markup=keyboard)
-    return States.BOOKING_DATE
-
-async def handle_date_select(update, context):
-    query = update.callback_query
-    await query.answer()
-    date = query.data.split("_", 1)[1]
-    context.user_data["date"] = date
-    await query.message.reply_text(f"Выбрана дата: {date}\\nВыберите время:")
-    return States.BOOKING_TIME
-async def handle_calendar_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = update.effective_user.id
-
-    if data.startswith('calendar_'):
-        year, month = map(int, data.split('_')[1:])
-        keyboard = calendar_service.get_calendar_keyboard(year, month)
-        await query.edit_message_reply_markup(reply_markup=keyboard)
-        return States.BOOKING_DATE
-
-    elif data.startswith('book_date_'):
-        date = data.split('_')[2]
-        context.user_data['booking_date'] = date
-        logger.info(f"BOOKING_DATE: user_id={user_id}, selected_date={date}")
-        await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:")
-        return States.BOOKING_TIME
-
-    return States.BOOKING_DATE
-
 
 if __name__ == '__main__':
     main()
+
 
