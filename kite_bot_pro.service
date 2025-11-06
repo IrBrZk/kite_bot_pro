@@ -1,1 +1,19 @@
-(вставь сюда содержимое из блока kite_bot_pro.service выше)
+[Unit]
+Description=Kite Bot Pro - Telegram Bot Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kite_bot_pro
+ExecStart=/home/ubuntu/kite_bot_pro/start.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

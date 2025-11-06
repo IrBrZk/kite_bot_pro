@@ -1,1 +1,6 @@
-(вставь сюда содержимое из блока .gitignore выше)
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.db
+kite_bot_env/
