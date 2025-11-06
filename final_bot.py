@@ -1159,7 +1159,7 @@ async def handle_language_selection(update, context):
     
     if language_code:
         # Сохраняем язык в базе данных
-        database_service.set_user_language(user_id, language_code)
+        await database_service.set_user_language(user_id, language_code)
         language_manager.set_user_language(user_id, language_code)
         
         # Получаем текст на выбранном языке
