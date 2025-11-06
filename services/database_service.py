@@ -204,6 +204,30 @@ def set_user_language(self, telegram_id: int, language: str):
         logger.info(f"Language set to {language} for user {telegram_id}")
         return True
     return False
+    
+    async def set_user_language(self, telegram_id: int, language: str) -> bool:
+        """Установить язык пользователя (async). Возвращает True при успехе."""
+        try:
+            # Убедимся, что пользователь существует
+            user = await self.get_user(telegram_id)
+            if not user:
+                logger.warning(f"User {telegram_id} not found when setting language")
+                return False
+
+            # Используем существующий async update_user для записи языка и флага language_selected
+            updated = await self.update_user(telegram_id, language=language, language_selected=True)
+            if updated:
+                logger.info(f"Language set to {language} for user {telegram_id}")
+                return True
+            else:
+                logger.error(f"❌ Failed to update language for user {telegram_id} (update_user returned False)")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Error setting language for user {telegram_id}: {e}", exc_info=True)
+            return False
+
+    
     async def get_or_create_user(self, telegram_user) -> Dict[str, Any]:
         """Get existing user or create new one"""
         user = await self.get_user(telegram_user.id)

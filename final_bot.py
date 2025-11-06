@@ -5,8 +5,10 @@ import logging
 import os
 import re
 import requests
+import sys
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler
 from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import error as telegram_error
 from datetime import datetime, timedelta
 
 from config.settings import TELEGRAM_BOT_TOKEN, LOCATIONS, SCHEDULE
@@ -25,6 +27,10 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Set specific log levels for detailed diagnostics
+logging.getLogger('telegram').setLevel(logging.DEBUG)
+logging.getLogger('httpx').setLevel(logging.INFO)
 
 # Глобальные сервисы
 current_states = {}  # Для отслеживания текущих состояний
@@ -280,7 +286,7 @@ def get_main_menu(user_id: int):
     """Упрощенное главное меню"""
     try:
         user_lang = language_manager.get_user_language(user_id)
-        print(f"🔧 GET_MAIN_MENU: Building for user {user_id}, language: {user_lang}")
+        logger.debug(f"DBG_GET_MAIN_MENU: Building menu for user {user_id}, language: {user_lang}")
         
         # Простые захардкоженные меню
         if user_lang == 'ru':
@@ -308,10 +314,11 @@ def get_main_menu(user_id: int):
                 ["🏠 Home"]
             ]
         
+        logger.debug(f"DBG_GET_MAIN_MENU: Menu built successfully for user {user_id} with language {user_lang}")
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
     except Exception as e:
-        print(f"❌ GET_MAIN_MENU ERROR: {e}")
+        logger.error(f"❌ GET_MAIN_MENU ERROR for user {user_id}: {e}", exc_info=True)
         # Ultimate fallback
         keyboard = [["📅 Booking", "📋 My Bookings"], ["🌐 Language"], ["🏠 Home"]]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -659,6 +666,7 @@ async def handle_time_selection(update, context):
     
     if selected_time in SCHEDULE['time_slots']:
         context.user_data['booking_time'] = selected_time
+        logger.info(f"BOOKING_TIME: user_id={user_id}, selected_time={selected_time}")
         choose_location_text = "📍 *Выберите локацию для занятия*"
         await update.message.reply_text(choose_location_text, reply_markup=get_locations_keyboard(user_id))
         return States.BOOKING_LOCATION_CHOICE
@@ -814,6 +822,8 @@ async def handle_final_confirmation(update, context):
     if "✅ Подтвердить бронирование" in user_response or "✅ Confirm Booking" in user_response or "✅ تأكيد الحجز" in user_response:
         booking_data = context.user_data
         
+        logger.info(f"BOOKING_SAVE: user_id={user_id}, date={booking_data.get('booking_date')}, time={booking_data.get('booking_time')}, location={booking_data.get('booking_location')}")
+        
         successful_bookings = []
         
         for lot_count in booking_data.get('selected_lots', [1]):
@@ -830,6 +840,7 @@ async def handle_final_confirmation(update, context):
             
             if booking:
                 successful_bookings.append(booking)
+                logger.info(f"BOOKING_CREATED: booking_id={booking.get('id', 'N/A')}, user_id={user_id}")
         
         if successful_bookings:
             success_text = format_successful_booking(user_id, successful_bookings)
@@ -1092,8 +1103,8 @@ async def handle_language_selection(update, context):
     user_id = update.effective_user.id
     selected_language = update.message.text
     
-    print(f"🔧 LANGUAGE_SELECTION: User {user_id} selected: '{selected_language}'")
-    print(f"🔧 CURRENT_STATE: {current_states.get(user_id, 'unknown')}")
+    logger.info(f"DBG_LANG_HANDLER: User {user_id} selected: '{selected_language}'")
+    logger.debug(f"DBG_LANG_HANDLER: Current state: {current_states.get(user_id, 'unknown')}")
     
     # Определяем язык
     language_code = 'en'
@@ -1106,10 +1117,21 @@ async def handle_language_selection(update, context):
         language_code = 'ar'
         success_text = "✅ تم تغيير اللغة إلى العربية"
     
-    print(f"🔧 Setting language to: {language_code}")
+    logger.info(f"DBG_LANG_HANDLER: Setting language to: {language_code} for user {user_id}")
     
-    # Сохраняем язык
+    # Сохраняем язык в memory manager
     language_manager.set_user_language(user_id, language_code)
+    
+    # Сохраняем язык в базу данных с обработкой ошибок
+    try:
+        await database_service.update_user(user_id, language=language_code, language_selected=True)
+        logger.debug(f"DBG_LANG_HANDLER: Database updated for user {user_id}")
+    except Exception as db_error:
+        logger.error(f"❌ Failed to save language to database for user {user_id}: {db_error}", exc_info=True)
+        # Continue anyway - language is saved in memory manager
+    
+    # Сохраняем в context для резервирования
+    context.user_data['language'] = language_code
     
     # Обновляем состояние
     current_states[user_id] = States.MAIN_MENU
@@ -1118,14 +1140,13 @@ async def handle_language_selection(update, context):
     try:
         menu = get_main_menu(user_id)
         await update.message.reply_text(success_text, reply_markup=menu)
-        print(f"🔧 Successfully sent menu for language: {language_code}")
+        logger.info(f"DBG_LANG_HANDLER: Successfully set menu for language: {language_code}, user: {user_id}")
         
         # ВАЖНО: Возвращаем правильное состояние
         return States.MAIN_MENU
         
     except Exception as e:
-        print(f"❌ Error in language selection: {e}")
-        traceback.print_exc()
+        logger.error(f"❌ Error in language selection: {e}", exc_info=True)
         # Fallback
         await update.message.reply_text("Language changed!", reply_markup=get_main_menu(user_id))
         return States.MAIN_MENU
@@ -1138,7 +1159,7 @@ async def handle_language_selection(update, context):
     
     if language_code:
         # Сохраняем язык в базе данных
-        database_service.set_user_language(user_id, language_code)
+        await database_service.set_user_language(user_id, language_code)
         language_manager.set_user_language(user_id, language_code)
         
         # Получаем текст на выбранном языке
@@ -1199,6 +1220,22 @@ async def cancel(update, context):
     await update.message.reply_text("Операция отменена", reply_markup=get_main_menu(user_id))
     return States.MAIN_MENU
 
+async def debug_message_handler(update, context):
+    """Lightweight debug handler for all messages"""
+    if update.effective_user and update.message:
+        logger.debug(f"DEBUG_MSG: user_id={update.effective_user.id}, chat_id={update.effective_chat.id}, text='{update.message.text}'")
+
+async def debug_callback_handler(update, context):
+    """Lightweight debug handler for all callback queries"""
+    if update.effective_user and update.callback_query:
+        logger.debug(f"DEBUG_CB: user_id={update.effective_user.id}, chat_id={update.effective_chat.id}, data='{update.callback_query.data}'")
+
+async def unknown_command(update, context):
+    """Handle unknown commands gracefully"""
+    user_id = update.effective_user.id
+    await update.message.reply_text("❌ Неизвестная команда", reply_markup=get_main_menu(user_id))
+    return States.MAIN_MENU
+
 async def error_handler(update, context):
     logger.error(f"Ошибка: {context.error}", exc_info=context.error)
     
@@ -1225,6 +1262,36 @@ async def handle_date_select(update, context):
     await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:")
     return States.BOOKING_TIME
 
+async def handle_calendar_callback(update, context):
+    """Handle calendar navigation and date selection"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = update.effective_user.id
+
+    if data.startswith('calendar_'):
+        # Navigate calendar months
+        year, month = map(int, data.split('_')[1:])
+        keyboard = calendar_service.get_calendar_keyboard(year, month)
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        return States.BOOKING_DATE
+
+    elif data.startswith('book_date_'):
+        # Select a specific date
+        date = data.split('_')[2]
+        context.user_data['booking_date'] = date
+        logger.info(f"BOOKING_DATE: user_id={user_id}, selected_date={date}")
+        await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:", reply_markup=get_times_keyboard())
+        return States.BOOKING_TIME
+    
+    elif data == 'home':
+        # Return to main menu
+        await query.message.reply_text("🏠 Главное меню", reply_markup=get_main_menu(user_id))
+        return States.MAIN_MENU
+    
+    # Ignore other callbacks
+    return States.BOOKING_DATE
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN не найден!")
@@ -1232,8 +1299,15 @@ def main():
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # Debug handlers at group 0 (run first, don't interfere with flow)
+    application.add_handler(MessageHandler(filters.ALL, debug_message_handler), group=0)
+    application.add_handler(CallbackQueryHandler(debug_callback_handler), group=0)
+    
     # Обработчик начала
     application.add_handler(CommandHandler("start", start))
+    
+    # Unknown command handler
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     
     # Основной ConversationHandler
     conv_handler = ConversationHandler(
@@ -1285,49 +1359,26 @@ def main():
             MessageHandler(filters.TEXT & filters.Regex('^🏠'), handle_main_menu),
             CommandHandler("cancel", cancel)
         ],
-        allow_reentry=True
+        allow_reentry=True,
+        per_message=True
     )
     
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
     
     logger.info("🚀 Финальный бот запущен с новой логикой бронирования!")
-    application.run_polling()
-async def handle_calendar(update, context):
-    query = update.callback_query
-    await query.answer()
-    _, year, month = query.data.split("_")
-    keyboard = calendar_service.get_calendar_keyboard(int(year), int(month))
-    await query.edit_message_reply_markup(reply_markup=keyboard)
-    return States.BOOKING_DATE
-
-async def handle_date_select(update, context):
-    query = update.callback_query
-    await query.answer()
-    date = query.data.split("_", 1)[1]
-    context.user_data["date"] = date
-    await query.message.reply_text(f"Выбрана дата: {date}\\nВыберите время:")
-    return States.BOOKING_TIME
-async def handle_calendar_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data.startswith('calendar_'):
-        year, month = map(int, data.split('_')[1:])
-        keyboard = calendar_service.get_calendar_keyboard(year, month)
-        await query.edit_message_reply_markup(reply_markup=keyboard)
-        return States.BOOKING_DATE
-
-    elif data.startswith('book_date_'):
-        date = data.split('_')[2]
-        context.user_data['booking_date'] = date
-        await query.message.reply_text(f"Выбрана дата: {date}\nВыберите время:")
-        return States.BOOKING_TIME
-
-    return States.BOOKING_DATE
-
+    
+    # Wrap run_polling to catch Conflict and other errors
+    try:
+        application.run_polling()
+    except telegram_error.Conflict as e:
+        logger.error(f"❌ telegram.error.Conflict: {e}. Another instance of the bot is already running. Exiting.", exc_info=True)
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Unhandled exception in bot: {e}", exc_info=True)
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
+
 
